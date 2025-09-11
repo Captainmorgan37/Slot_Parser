@@ -9,7 +9,8 @@ st.title("🛫 OCS vs Fl3xx Slot Compliance")
 
 st.markdown("""
 Upload **Fl3xx CSV(s)** and **OCS CSV(s)** (you may upload GIR format or structured export).
-This tool will normalize both formats and compare them against Fl3xx.
+This tool normalizes both formats and compares them against Fl3xx.
+
 Results:
 - ✔ Matched
 - ⚠ Flights Missing Slots
@@ -33,12 +34,14 @@ ocs_line_re = re.compile(
 )
 
 def parse_gir_file(file):
+    file.seek(0)
     df = pd.read_csv(file)
     col = df.columns[0]
     parsed = []
     for line in df[col].astype(str).tolist():
         m = ocs_line_re.search(line)
-        if not m: continue
+        if not m: 
+            continue
         gd = m.groupdict()
         day = int(gd["date"][:2]); month = MONTHS[gd["date"][2:5]]
         parsed.append({
@@ -52,14 +55,18 @@ def parse_gir_file(file):
     return pd.DataFrame(parsed)
 
 def parse_structured_file(file):
+    file.seek(0)
     df = pd.read_csv(file)
     rows = []
     for _, r in df.iterrows():
-        if pd.isna(r.get("A/P")) or pd.isna(r.get("Date")): continue
+        if pd.isna(r.get("A/P")) or pd.isna(r.get("Date")): 
+            continue
         try:
             dt = pd.to_datetime(r["Date"], errors="coerce", dayfirst=True)
-            if pd.isna(dt): continue
-        except: continue
+            if pd.isna(dt): 
+                continue
+        except: 
+            continue
         # Arrival slot
         if pd.notna(r.get("ATime")) and pd.notna(r.get("ASlotId")):
             rows.append({
@@ -83,27 +90,31 @@ def parse_structured_file(file):
     return pd.DataFrame(rows)
 
 def parse_ocs_file(file):
-    df = pd.read_csv(file, nrows=5)  # peek at headers
-    if "GIR" in df.columns:   # GIR format
+    file.seek(0)
+    df_head = pd.read_csv(file, nrows=5)  # peek headers
+    file.seek(0)
+    if "GIR" in df_head.columns:
         return parse_gir_file(file)
-    elif "A/P" in df.columns: # structured format
+    elif "A/P" in df_head.columns:
         return parse_structured_file(file)
     else:
         return pd.DataFrame([])
 
 # ---------------- Fl3xx Parsing ----------------
 def parse_fl3xx_file(file):
+    file.seek(0)
     df = pd.read_csv(file)
     df["Tail"] = df["Aircraft"].astype(str).str.replace("-","").str.upper()
     df["OnBlock"] = pd.to_datetime(df["On-Block (Est)"], errors="coerce", dayfirst=True)
     dep_cols_try = ["Off-Block (Est)","Out-Block (Est)","STD (UTC)","Scheduled Departure (UTC)"]
     dep_series = None
     for c in dep_cols_try:
-        if c in df.columns: dep_series = pd.to_datetime(df[c], errors="coerce", dayfirst=True); break
+        if c in df.columns: 
+            dep_series = pd.to_datetime(df[c], errors="coerce", dayfirst=True); break
     df["OffBlock"] = dep_series
     return df
 
-# ---------------- Comparison Logic ----------------
+# ---------------- Comparison ----------------
 def compare(fl3xx_df, ocs_df):
     results = {"Matched": [], "Missing": [], "Misaligned": []}
     used_slots = set()
@@ -111,19 +122,19 @@ def compare(fl3xx_df, ocs_df):
     def minutes_diff(a, b):
         return abs(int((a - b).total_seconds() // 60))
 
-    # Build legs from Fl3xx
+    # Build legs
     legs = []
     for _, r in fl3xx_df.iterrows():
         tail = str(r.get("Tail","")).upper()
         # Arrival
         to_ap = r.get("To (ICAO)")
         if isinstance(to_ap, str) and to_ap in WINDOWS_MIN and pd.notna(r["OnBlock"]):
-            legs.append({"Flight": r["Booking"], "Tail": tail, "Airport": to_ap,
+            legs.append({"Flight": r.get("Booking"), "Tail": tail, "Airport": to_ap,
                          "Movement": "ARR", "SchedDT": r["OnBlock"]})
         # Departure
         from_ap = r.get("From (ICAO)")
         if isinstance(from_ap, str) and from_ap in WINDOWS_MIN and pd.notna(r["OffBlock"]):
-            legs.append({"Flight": r["Booking"], "Tail": tail, "Airport": from_ap,
+            legs.append({"Flight": r.get("Booking"), "Tail": tail, "Airport": from_ap,
                          "Movement": "DEP", "SchedDT": r["OffBlock"]})
 
     for leg in legs:
@@ -178,17 +189,21 @@ if fl3xx_files and ocs_files:
 
     results, stale = compare(fl3xx_df, ocs_df)
 
-    st.subheader("✔ Matched")
-    st.dataframe(pd.DataFrame(results["Matched"]))
+    def show_table(df, title):
+        st.subheader(title)
+        st.dataframe(df)
+        if not df.empty:
+            st.download_button(
+                f"Download {title} CSV",
+                df.to_csv(index=False).encode("utf-8"),
+                file_name=f"{title.replace(' ','_').lower()}.csv",
+                mime="text/csv"
+            )
 
-    st.subheader("⚠ Missing")
-    st.dataframe(pd.DataFrame(results["Missing"]))
-
-    st.subheader("⚠ Misaligned")
-    st.dataframe(pd.DataFrame(results["Misaligned"]))
-
-    st.subheader("⚠ Stale Slots")
-    st.dataframe(stale)
+    show_table(pd.DataFrame(results["Matched"]), "✔ Matched")
+    show_table(pd.DataFrame(results["Missing"]), "⚠ Missing")
+    show_table(pd.DataFrame(results["Misaligned"]), "⚠ Misaligned")
+    show_table(stale, "⚠ Stale Slots")
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")

@@ -96,14 +96,28 @@ def parse_gir_file(file):
 # --- Structured parser (CYYC, CYVR, CYUL) ---
 def parse_structured_file(file):
     df = _read_csv_reset(file)
+    # Normalize headers
     df.columns = [re.sub(r"[^A-Za-z0-9]", "", c).upper() for c in df.columns]
+
+    # Aliases (in case headers differ slightly)
+    colmap = {
+        "AP": "AP",
+        "AIREG": "ACREG", "ACREG": "ACREG", "ACREGISTRATION": "ACREG",
+        "DATE": "DATE",
+        "ATIME": "ATIME", "ARRTIME": "ATIME",
+        "DTIME": "DTIME", "DEPTIME": "DTIME",
+        "ASLOTID": "ASLOTID",
+        "DSLOTID": "DSLOTID",
+    }
+    normcols = {colmap.get(c, c): c for c in df.columns}
 
     rows = []
     for _, r in df.iterrows():
-        ap = r.get("AP")
-        date_val = r.get("DATE")
+        ap = r.get(normcols.get("AP"))
+        date_val = r.get(normcols.get("DATE"))
         if pd.isna(ap) or pd.isna(date_val):
             continue
+
         try:
             dt = pd.to_datetime(str(date_val), errors="coerce", dayfirst=True)
             if pd.isna(dt):
@@ -111,11 +125,12 @@ def parse_structured_file(file):
         except Exception:
             continue
 
-        tail = str(r.get("ACREG", "")).replace("-", "").upper()
+        tail = str(r.get(normcols.get("ACREG"), "")).replace("-", "").upper()
 
-        atime = _hhmm_str(r.get("ATIME"))
-        aslot = r.get("ASLOTID")
-        if pd.notna(atime) and pd.notna(aslot):
+        # Arrival
+        atime = _hhmm_str(r.get(normcols.get("ATIME")))
+        aslot = r.get(normcols.get("ASLOTID"))
+        if atime and pd.notna(aslot):
             rows.append({
                 "SlotAirport": str(ap).upper(),
                 "Date": (int(dt.day), int(dt.month)),
@@ -125,9 +140,10 @@ def parse_structured_file(file):
                 "SlotRef": str(aslot)
             })
 
-        dtime = _hhmm_str(r.get("DTIME"))
-        dslot = r.get("DSLOTID")
-        if pd.notna(dtime) and pd.notna(dslot):
+        # Departure
+        dtime = _hhmm_str(r.get(normcols.get("DTIME")))
+        dslot = r.get(normcols.get("DSLOTID"))
+        if dtime and pd.notna(dslot):
             rows.append({
                 "SlotAirport": str(ap).upper(),
                 "Date": (int(dt.day), int(dt.month)),
@@ -137,8 +153,9 @@ def parse_structured_file(file):
                 "SlotRef": str(dslot)
             })
 
-    print(f"Parsed {len(rows)} structured rows")
+    print(f"Parsed {len(rows)} structured rows out of {len(df)}")
     return pd.DataFrame(rows, columns=["SlotAirport","Date","Movement","SlotTimeHHMM","Tail","SlotRef"])
+
 
 def parse_ocs_file(file):
     head = _read_csv_reset(file, nrows=5)
@@ -283,3 +300,4 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+

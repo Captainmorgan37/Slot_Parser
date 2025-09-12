@@ -266,11 +266,14 @@ def parse_fl3xx_file(file):
 # ---------------- Comparison ----------------
 def compare(fl3xx_df, ocs_df):
     results = {"Matched": [], "Missing": [], "Misaligned": []}
-    used_slot_idx = set()
+
+    # Track used slots by SlotRef (robust)
+    used_slot_refs = set()
 
     def minutes_diff(a, b):
         return abs(int((a - b).total_seconds() // 60))
 
+    # Build legs from Fl3xx to slot airports
     legs = []
     for _, r in fl3xx_df.iterrows():
         tail = str(r.get("Tail","")).upper()
@@ -286,9 +289,11 @@ def compare(fl3xx_df, ocs_df):
     for leg in legs:
         ap, move, tail, sched_dt = leg["Airport"], leg["Movement"], leg["Tail"], leg["SchedDT"]
         day, month = sched_dt.day, sched_dt.month
-        cand = ocs_df[(ocs_df["SlotAirport"] == ap) &
-                      (ocs_df["Movement"] == move) &
-                      (ocs_df["Date"].apply(lambda d: isinstance(d, tuple) and d==(day, month)))]
+        cand = ocs_df[
+            (ocs_df["SlotAirport"] == ap) &
+            (ocs_df["Movement"]   == move) &
+            (ocs_df["Date"].apply(lambda d: isinstance(d, tuple) and d==(day, month)))
+        ]
         if cand.empty:
             results["Missing"].append({**leg, "Reason":"No slot for airport/date/movement"})
             continue
@@ -296,8 +301,7 @@ def compare(fl3xx_df, ocs_df):
         window = WINDOWS_MIN.get(ap, 30)
 
         def ocs_dt(row):
-            hhmm = row["SlotTimeHHMM"]
-            hh = int(hhmm[:2]); mm = int(hhmm[2:])
+            hhmm = row["SlotTimeHHMM"]; hh = int(hhmm[:2]); mm = int(hhmm[2:])
             return datetime(sched_dt.year, month, day, hh, mm)
 
         same_tail = cand[cand["Tail"] == tail]
@@ -305,21 +309,21 @@ def compare(fl3xx_df, ocs_df):
         if not same_tail.empty:
             deltas = same_tail.apply(lambda s: minutes_diff(sched_dt, ocs_dt(s)), axis=1)
             best_idx = deltas.idxmin()
-            best_delta = deltas.loc[best_idx]
+            best_row = same_tail.loc[best_idx]
+            best_delta = int(deltas.loc[best_idx])
             if best_delta <= window:
-                best_row = same_tail.loc[best_idx]
                 results["Matched"].append({**leg, "SlotTime": best_row["SlotTimeHHMM"],
-                                           "DeltaMin": int(best_delta), "SlotRef": best_row["SlotRef"]})
-                used_slot_idx.add(best_idx)
+                                           "DeltaMin": best_delta, "SlotRef": best_row["SlotRef"]})
+                used_slot_refs.add(str(best_row["SlotRef"]))
             else:
-                nearest = same_tail.loc[best_idx]
-                results["Misaligned"].append({**leg, "NearestSlotTime": nearest["SlotTimeHHMM"],
-                                              "Issue": f"Outside {window} min window", "SlotRef": nearest["SlotRef"]})
+                results["Misaligned"].append({**leg, "NearestSlotTime": best_row["SlotTimeHHMM"],
+                                              "Issue": f"Outside {window} min window",
+                                              "SlotRef": best_row["SlotRef"]})
         else:
             deltas_any = cand.apply(lambda s: minutes_diff(sched_dt, ocs_dt(s)), axis=1)
             best_idx = deltas_any.idxmin()
-            best_delta = deltas_any.loc[best_idx]
             nearest = cand.loc[best_idx]
+            best_delta = int(deltas_any.loc[best_idx])
             if best_delta <= window:
                 results["Misaligned"].append({**leg, "NearestSlotTime": nearest["SlotTimeHHMM"],
                                               "Issue": f"Wrong tail (slot for {nearest['Tail']})",
@@ -327,12 +331,10 @@ def compare(fl3xx_df, ocs_df):
             else:
                 results["Missing"].append({**leg, "Reason": "No matching tail/time within window"})
 
-    stale_mask = pd.Series([True]*len(ocs_df), index=ocs_df.index)
-    if used_slot_idx:
-        stale_mask.loc[list(used_slot_idx)] = False
-    stale_df = ocs_df[stale_mask].copy()
-
+    # Slots not used by any matched leg
+    stale_df = ocs_df[~ocs_df["SlotRef"].astype(str).isin(used_slot_refs)].copy()
     return results, stale_df
+
 
 # ---------------- UI ----------------
 fl3xx_files = st.file_uploader("Upload Fl3xx CSV(s)", type="csv", accept_multiple_files=True)
@@ -378,5 +380,6 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 

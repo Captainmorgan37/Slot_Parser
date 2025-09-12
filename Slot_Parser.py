@@ -91,53 +91,93 @@ def parse_gir_file(file):
     df = _read_csv_reset(file)
     col = df.columns[0]
     parsed = []
+
     for line in df[col].astype(str).tolist():
+        # normalize whitespace
         line = line.replace("\u00A0", " ")
         line = re.sub(r"\s+", " ", line.strip())
         parts = line.split(" ")
-        if len(parts) < 7:
+        if len(parts) < 5:
             continue
+
         try:
-            # Date like "13SEP"
-            date_str = parts[2]
-
-            # Pax + aircraft type (unused right now, but parsed cleanly)
-            pax_type = parts[3]
-
-            # Token like "CYUL0320" → ICAO + HHMM
-            icao_time = parts[4]
-            m_time = re.match(r"([A-Z]{4})(\d{3,4})", icao_time)
-            if not m_time:
+            # 1) Find date token like 13SEP anywhere
+            date_idx = next((i for i, p in enumerate(parts) if re.match(r"^\d{2}[A-Z]{3}$", p)), None)
+            if date_idx is None:
                 continue
-            link_icao, slot_time = m_time.groups()
-
-            # Tail
-            tail_token = next(p for p in parts if p.startswith("RE."))
-            tail = tail_token.replace("RE.","")
-
-            # Slot details (e.g. "IDA.CYYZAGNN953500/")
-            slot_token = next(p for p in parts if p.startswith("ID"))
-            m = re.match(r"ID[AD]\.(?P<apt>[A-Z]{4})(?P<mov>[AD])(?P<ref>[A-Z0-9]+)/", slot_token)
-            if not m:
-                continue
-
-            gd = m.groupdict()
+            date_str = parts[date_idx]
             day = int(date_str[:2])
-            month = MONTHS.get(date_str[2:5])
+            month = MONTHS.get(date_str[2:5].upper())
+            if not month:
+                continue
+
+            # 2) Find ICAO + time (supports: CYUL0320, 0320CYUL, or split "CYUL","0320" / "0320","CYUL")
+            link_icao, slot_time = None, None
+
+            # search tokens after date for ICAO/time
+            for i in range(date_idx + 1, len(parts)):
+                tok = parts[i]
+
+                m1 = re.match(r"^([A-Z]{4})(\d{3,4})$", tok)   # CYUL0320
+                m2 = re.match(r"^(\d{3,4})([A-Z]{4})$", tok)   # 0320CYUL
+                if m1:
+                    link_icao, slot_time = m1.groups()
+                    break
+                if m2:
+                    slot_time, link_icao = m2.groups()
+                    break
+
+                # split across two tokens?
+                if i + 1 < len(parts):
+                    nxt = parts[i + 1]
+                    if re.match(r"^[A-Z]{4}$", tok) and re.match(r"^\d{3,4}$", nxt):
+                        link_icao, slot_time = tok, nxt
+                        break
+                    if re.match(r"^\d{3,4}$", tok) and re.match(r"^[A-Z]{4}$", nxt):
+                        slot_time, link_icao = tok, nxt
+                        break
+
+            if not slot_time or not link_icao:
+                continue
+
+            slot_time = _hhmm_str(slot_time)
+            if not slot_time:
+                continue
+
+            # 3) Tail token like RE.CFASY
+            try:
+                tail_token = next(p for p in parts if p.startswith("RE."))
+            except StopIteration:
+                continue
+            tail = tail_token.replace("RE.", "").upper()
+
+            # 4) Slot token like IDA.CYYZAGNN953500/  or IDD.CYYZDGNN027800/
+            try:
+                slot_token = next(p for p in parts if p.startswith("ID"))
+            except StopIteration:
+                continue
+
+            mslot = re.match(r"ID[AD]\.(?P<apt>[A-Z]{4})(?P<mov>[AD])(?P<ref>[A-Z0-9]+)/?", slot_token)
+            if not mslot:
+                continue
+            gd = mslot.groupdict()
 
             parsed.append({
                 "SlotAirport": gd["apt"],
                 "Date": (day, month),
                 "Movement": "ARR" if gd["mov"] == "A" else "DEP",
-                "SlotTimeHHMM": _hhmm_str(slot_time),
-                "Tail": tail.upper(),
+                "SlotTimeHHMM": slot_time,
+                "Tail": tail,
                 "SlotRef": gd["ref"]
             })
+
         except Exception:
+            # keep robust; skip only the bad line
             continue
 
     print(f"Parsed {len(parsed)} GIR rows out of {len(df)}")
     return pd.DataFrame(parsed, columns=["SlotAirport","Date","Movement","SlotTimeHHMM","Tail","SlotRef"])
+
 
 def parse_structured_file(file):
     df = _read_csv_reset(file)
@@ -338,4 +378,5 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 

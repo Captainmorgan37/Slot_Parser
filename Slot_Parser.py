@@ -172,15 +172,17 @@ def parse_gir_file(file):
             if not mslot:
                 continue
             gd = mslot.groupdict()
-
+            
+            # Build full slot reference to match structured format (e.g., CYULAGN0396000)
+            slot_ref_full = f"{gd['apt']}{gd['mov']}{gd['ref']}"
+            
             parsed.append({
                 "SlotAirport": gd["apt"],
                 "Date": (day, month),
                 "Movement": "ARR" if gd["mov"] == "A" else "DEP",
                 "SlotTimeHHMM": slot_time,
                 "Tail": tail,
-                "SlotRef": gd["ref"]
-            })
+                "SlotRef": slot_ref_full  # <-- use full slot id
 
         except Exception:
             # keep robust; skip only the bad line
@@ -436,6 +438,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

@@ -50,8 +50,7 @@ def _hhmm_str(x):
 
 # ---------------- OCS Parsing ----------------
 ocs_line_re = re.compile(
-    r"""^(?P<ignored>[A-Z0-9 ]+)\s+      # allow spaces inside ID
-        (?P<date>\d{2}[A-Z]{3})\s+
+    r""".*?(?P<date>\d{2}[A-Z]{3})\s+        # start at date
         (?P<maxpax>\d{3})(?P<acft>[A-Z0-9]{3,4})\s+
         (?P<link_icao>[A-Z]{4})(?P<slot_time>\d{4}).*?
         RE\.(?P<tail>[A-Z0-9]+).*?
@@ -59,19 +58,16 @@ ocs_line_re = re.compile(
     re.VERBOSE
 )
 
+
 def parse_gir_file(file):
     df = _read_csv_reset(file)
     col = df.columns[0]
     parsed = []
     for line in df[col].astype(str).tolist():
-        # normalize slot ID spacing at start
-        line = re.sub(r"^(\w)\s+(\w+)", r"\1\2", line.strip())
-
         m = ocs_line_re.search(line)
         if not m:
             continue
         gd = m.groupdict()
-        slot_id_raw = gd.get("ignored", "").replace(" ", "")
         day = int(gd["date"][:2]); month = MONTHS.get(gd["date"][2:5])
         parsed.append({
             "SlotAirport": gd["slot_airport"],
@@ -82,6 +78,7 @@ def parse_gir_file(file):
             "SlotRef": gd["slot_ref"]
         })
     return pd.DataFrame(parsed, columns=["SlotAirport","Date","Movement","SlotTimeHHMM","Tail","SlotRef"])
+
 
 
 def parse_structured_file(file):
@@ -272,5 +269,6 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 

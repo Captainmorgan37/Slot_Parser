@@ -366,28 +366,52 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
         ap, move, tail, sched_dt = leg["Airport"], leg["Movement"], leg["Tail"], leg["SchedDT"]
         day, month = sched_dt.day, sched_dt.month
 
+        # Candidates: same airport & movement
         cand = ocs_df[
             (ocs_df["SlotAirport"] == ap) &
-            (ocs_df["Movement"] == move) &
-            (ocs_df["Date"].apply(lambda d: isinstance(d, tuple) and d == (day, month)))
-        ]
+            (ocs_df["Movement"] == move)
+        ].copy()
 
         if cand.empty:
-            if _cyvr_future_exempt(ap, sched_dt):  # your helper
+            if _cyvr_future_exempt(ap, sched_dt):  # keep your CYVR rule
                 continue
             results["Missing"].append({**leg, "Reason": "No slot for airport/date/movement"})
             continue
 
+        # Build each slot's absolute datetime using the slot's own (day, month)
+        def slot_dt_for_row(row):
+            day_r, month_r = row["Date"]
+            hhmm = row["SlotTimeHHMM"]
+            hh = int(hhmm[:2]); mm = int(hhmm[2:])
+            return datetime(sched_dt.year, month_r, day_r, hh, mm)
+
+        cand["_SlotDT"] = cand.apply(slot_dt_for_row, axis=1)
+
+        # Keep slots that are on the same day or ±1 day of the leg (to allow cross-midnight matches)
+        cand = cand[cand["_SlotDT"].apply(
+            lambda d: abs((d.date() - sched_dt.date()).days) <= 1
+        )]
+
+        if cand.empty:
+            if _cyvr_future_exempt(ap, sched_dt):
+                continue
+            results["Missing"].append({**leg, "Reason": "No slot for airport/date/movement (±1 day)"})
+            continue
+
         window = WINDOWS_MIN.get(ap, 30)
+
+        def minutes_diff(a, b):
+            return abs(int((a - b).total_seconds() // 60))
+
 
         def ocs_dt(row):
             hhmm = row["SlotTimeHHMM"]; hh = int(hhmm[:2]); mm = int(hhmm[2:])
             return datetime(sched_dt.year, month, day, hh, mm)
 
-        # Prefer same-tail (decides if it's a time mismatch)
+        # Prefer same-tail
         same_tail = cand[cand["Tail"] == tail]
         if not same_tail.empty:
-            deltas = same_tail.apply(lambda s: minutes_diff(sched_dt, ocs_dt(s)), axis=1)
+            deltas = same_tail["_SlotDT"].apply(lambda dt: minutes_diff(sched_dt, dt))
             best_idx = deltas.idxmin()
             best_row = same_tail.loc[best_idx]
             best_delta = int(deltas.loc[best_idx])
@@ -400,7 +424,6 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
                     "SlotRef": best_row["SlotRef"]
                 })
             else:
-                # TIME mismatch (correct tail, outside window)
                 results["MisalignedTime"].append({
                     **leg,
                     "NearestSlotTime": best_row["SlotTimeHHMM"],
@@ -409,32 +432,30 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
                     "SlotRef": best_row["SlotRef"]
                 })
         else:
-            # No exact tail match → check nearest any-tail (this is a TAIL mismatch if within window)
-            deltas_any = cand.apply(lambda s: minutes_diff(sched_dt, ocs_dt(s)), axis=1)
+            deltas_any = cand["_SlotDT"].apply(lambda dt: minutes_diff(sched_dt, dt))
             best_idx = deltas_any.idxmin()
             nearest = cand.loc[best_idx]
             best_delta = int(deltas_any.loc[best_idx])
 
             if best_delta <= window:
-                # TAIL mismatch (time okay, but wrong tail booked)
+                # Tail mismatch
                 if _tail_future_exempt(sched_dt, threshold_days=5):
-                    # Don't show tail mismatches 5+ days out
-                    continue
-                
-                results["MisalignedTail"].append({
-                    **leg,
-                    "NearestSlotTime": nearest["SlotTimeHHMM"],
-                    "DeltaMin": best_delta,
-                    "WindowMin": window,
-                    "SlotTail": nearest["Tail"],
-                    "SlotRef": nearest["SlotRef"]
-                })
-
+                    pass  # suppress far-future tail mismatches if you added that helper
+                else:
+                    results["MisalignedTail"].append({
+                        **leg,
+                        "NearestSlotTime": nearest["SlotTimeHHMM"],
+                        "DeltaMin": best_delta,
+                        "WindowMin": window,
+                        "SlotTail": nearest["Tail"],
+                        "SlotRef": nearest["SlotRef"]
+                    })
             else:
-                # No usable slot (wrong tail and outside time window)
                 if _cyvr_future_exempt(ap, sched_dt):
-                    continue
-                results["Missing"].append({**leg, "Reason": "No matching tail/time within window"})
+                    pass
+                else:
+                    results["Missing"].append({**leg, "Reason": "No matching tail/time within window"})
+
 
     # --- Slot-side evaluation (Stale) — unchanged: a slot is stale only if no leg exists for same airport/movement/date
     def has_any_leg_for_slot(slot_row):
@@ -492,6 +513,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

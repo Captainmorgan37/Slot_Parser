@@ -296,6 +296,23 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
 
     used_slot_refs = set()
 
+        # De-duplicate legs so the same flight isn't processed twice
+    if legs:
+        legs_df = pd.DataFrame(legs)
+        # Normalize time to minute so tiny diffs don't create dup keys
+        legs_df["SchedDT"] = pd.to_datetime(legs_df["SchedDT"]).dt.floor("min")
+        # Build a stable key per unique leg
+        legs_df["LegKey"] = (
+            legs_df["Flight"].astype(str) + "|" +
+            legs_df["Tail"].astype(str) + "|" +
+            legs_df["Airport"].astype(str) + "|" +
+            legs_df["Movement"].astype(str) + "|" +
+            legs_df["SchedDT"].astype(str)
+        )
+        legs_df = legs_df.drop_duplicates(subset="LegKey").drop(columns="LegKey")
+        legs = legs_df.to_dict("records")
+
+
     # --- Leg-side matching (drives Matched / Misaligned / Missing)
     for leg in legs:
         ap, move, tail, sched_dt = leg["Airport"], leg["Movement"], leg["Tail"], leg["SchedDT"]
@@ -419,6 +436,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

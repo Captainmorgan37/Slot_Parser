@@ -50,25 +50,32 @@ def _hhmm_str(x):
 
 # ---------------- OCS Parsing ----------------
 ocs_line_re = re.compile(
-    r""".*?(?P<date>\d{2}[A-Z]{3})\s+        # start at date
-        (?P<maxpax>\d{3})(?P<acft>[A-Z0-9]{3,4})\s+
-        (?P<link_icao>[A-Z]{4})(?P<slot_time>\d{4}).*?
-        RE\.(?P<tail>[A-Z0-9]+).*?
-        \.(?P<slot_airport>[A-Z]{4})(?P<movement>[AD])(?P<slot_ref>[A-Z0-9]+)/""",
+    r""".*?(?P<date>\d{2}[A-Z]{3}).*?             # find date (e.g. 17SEP)
+        (?P<maxpax>\d{3})(?P<acft>[A-Z0-9]{3,4}).*?   # pax + acft type
+        (?P<link_icao>[A-Z]{4})(?P<slot_time>\d{4}).*? # airport + time
+        RE\.(?P<tail>[A-Z0-9]+).*?                    # tail after RE.
+        \.(?P<slot_airport>[A-Z]{4})(?P<movement>[AD])(?P<slot_ref>[A-Z0-9]+)/ # slot ref
+     """,
     re.VERBOSE
 )
-
 
 def parse_gir_file(file):
     df = _read_csv_reset(file)
     col = df.columns[0]
     parsed = []
     for line in df[col].astype(str).tolist():
+        # --- normalize whitespace ---
+        line = line.replace("\u00A0", " ")        # replace NBSP
+        line = re.sub(r"\s+", " ", line.strip())  # collapse spaces/tabs
+
         m = ocs_line_re.search(line)
         if not m:
-            continue
+            continue  # skip if no match
         gd = m.groupdict()
-        day = int(gd["date"][:2]); month = MONTHS.get(gd["date"][2:5])
+
+        day = int(gd["date"][:2])
+        month = MONTHS.get(gd["date"][2:5])
+
         parsed.append({
             "SlotAirport": gd["slot_airport"],
             "Date": (day, month),
@@ -77,7 +84,9 @@ def parse_gir_file(file):
             "Tail": gd["tail"].upper(),
             "SlotRef": gd["slot_ref"]
         })
+
     return pd.DataFrame(parsed, columns=["SlotAirport","Date","Movement","SlotTimeHHMM","Tail","SlotRef"])
+
 
 
 
@@ -269,6 +278,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

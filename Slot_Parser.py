@@ -64,15 +64,17 @@ def parse_gir_file(file):
     col = df.columns[0]
     parsed = []
     for line in df[col].astype(str).tolist():
-        # --- normalize whitespace ---
-        line = line.replace("\u00A0", " ")        # replace NBSP
-        line = re.sub(r"\s+", " ", line.strip())  # collapse spaces/tabs
+        # Normalize whitespace
+        line = line.replace("\u00A0", " ")
+        line = re.sub(r"\s+", " ", line.strip())
 
         m = ocs_line_re.search(line)
         if not m:
-            continue  # skip if no match
-        gd = m.groupdict()
+            # print or collect bad lines for debug
+            print("NO MATCH:", repr(line[:100]))
+            continue
 
+        gd = m.groupdict()
         day = int(gd["date"][:2])
         month = MONTHS.get(gd["date"][2:5])
 
@@ -85,7 +87,9 @@ def parse_gir_file(file):
             "SlotRef": gd["slot_ref"]
         })
 
+    print(f"Parsed {len(parsed)} rows out of {len(df)}")
     return pd.DataFrame(parsed, columns=["SlotAirport","Date","Movement","SlotTimeHHMM","Tail","SlotRef"])
+
 
 
 
@@ -278,6 +282,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

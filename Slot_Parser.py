@@ -76,6 +76,14 @@ def show_table(df: pd.DataFrame, title: str, key: str):
         key=f"dl_{key}"
     )
 
+def _tail_future_exempt(sched_dt: pd.Timestamp, threshold_days: int = 5) -> bool:
+    """Hide tail-mismatch items when the leg is >= threshold_days in the future."""
+    if pd.isna(sched_dt):
+        return False
+    today = pd.Timestamp.utcnow().date()
+    days_out = (sched_dt.date() - today).days
+    return days_out >= threshold_days
+
 
 # ---------------- Tail filtering ----------------
 def load_tails(path="tails.csv"):
@@ -409,6 +417,10 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
 
             if best_delta <= window:
                 # TAIL mismatch (time okay, but wrong tail booked)
+                if _tail_future_exempt(sched_dt, threshold_days=5):
+                    # Don't show tail mismatches 5+ days out
+                    continue
+                
                 results["MisalignedTail"].append({
                     **leg,
                     "NearestSlotTime": nearest["SlotTimeHHMM"],
@@ -417,6 +429,7 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
                     "SlotTail": nearest["Tail"],
                     "SlotRef": nearest["SlotRef"]
                 })
+
             else:
                 # No usable slot (wrong tail and outside time window)
                 if _cyvr_future_exempt(ap, sched_dt):
@@ -479,6 +492,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

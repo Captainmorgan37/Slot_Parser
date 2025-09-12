@@ -99,22 +99,32 @@ def parse_structured_file(file):
     df.columns = [re.sub(r"[^A-Za-z0-9]", "", c).upper() for c in df.columns]
 
     rows = []
-    for _, r in df.iterrows():
+    skipped = 0
+
+    for i, r in df.iterrows():
         ap = r.get("AP")
         date_val = str(r.get("DATE")).strip()
         if pd.isna(ap) or not date_val:
+            skipped += 1
+            print(f"Row {i} skipped, missing AP or DATE: {r.to_dict()}")
             continue
 
         # Take first half of "13SEP 13SEP"
         token = date_val.split()[0] if " " in date_val else date_val
         if not re.match(r"\d{2}[A-Z]{3}", token):
+            skipped += 1
+            print(f"Row {i} skipped, bad date: {repr(date_val)}")
             continue
         day = int(token[:2])
         month = MONTHS.get(token[2:5].upper())
         if not month:
+            skipped += 1
+            print(f"Row {i} skipped, bad month in date: {repr(date_val)}")
             continue
 
         tail = str(r.get("ACREG", "")).replace("-", "").upper()
+
+        added = False
 
         # Arrival
         atime = _hhmm_str(r.get("ATIME"))
@@ -128,6 +138,7 @@ def parse_structured_file(file):
                 "Tail": tail,
                 "SlotRef": str(aslot)
             })
+            added = True
 
         # Departure
         dtime = _hhmm_str(r.get("DTIME"))
@@ -141,10 +152,14 @@ def parse_structured_file(file):
                 "Tail": tail,
                 "SlotRef": str(dslot)
             })
+            added = True
 
-    print(f"Parsed {len(rows)} structured rows out of {len(df)}")
+        if not added:
+            skipped += 1
+            print(f"Row {i} skipped, no A/D times or slots: {r.to_dict()}")
+
+    print(f"Parsed {len(rows)} structured slots, skipped {skipped} rows out of {len(df)}")
     return pd.DataFrame(rows, columns=["SlotAirport","Date","Movement","SlotTimeHHMM","Tail","SlotRef"])
-
 
 
 def parse_ocs_file(file):
@@ -290,5 +305,6 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 

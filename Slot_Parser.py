@@ -183,7 +183,8 @@ def parse_gir_file(file):
                 "SlotTimeHHMM": slot_time,
                 "Tail": tail,
                 "SlotRef": slot_ref_full  # <-- use full slot id
-
+})
+            
         except Exception:
             # keep robust; skip only the bad line
             continue
@@ -438,6 +439,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

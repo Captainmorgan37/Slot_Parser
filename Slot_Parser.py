@@ -264,19 +264,13 @@ def parse_fl3xx_file(file):
     return df[cols].copy()
 
 # ---------------- Comparison ----------------
-def compare(fl3xx_df, ocs_df):
+def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
     results = {"Matched": [], "Missing": [], "Misaligned": []}
 
-    # Track used slots by SlotRef (robust)
-    used_slot_refs = set()
-
-    def minutes_diff(a, b):
-        return abs(int((a - b).total_seconds() // 60))
-
-    # Build legs from Fl3xx to slot airports
+    # Build Fl3xx legs at slot airports
     legs = []
     for _, r in fl3xx_df.iterrows():
-        tail = str(r.get("Tail","")).upper()
+        tail = str(r.get("Tail", "")).upper()
         to_ap = r.get("To (ICAO)")
         if isinstance(to_ap, str) and to_ap in SLOT_AIRPORTS and pd.notna(r.get("OnBlock")):
             legs.append({"Flight": r.get("Booking"), "Tail": tail, "Airport": to_ap,
@@ -286,16 +280,24 @@ def compare(fl3xx_df, ocs_df):
             legs.append({"Flight": r.get("Booking"), "Tail": tail, "Airport": from_ap,
                          "Movement": "DEP", "SchedDT": r.get("OffBlock")})
 
+    def minutes_diff(a, b):
+        return abs(int((a - b).total_seconds() // 60))
+
+    used_slot_refs = set()
+
+    # --- Leg-side matching (drives Matched / Misaligned / Missing)
     for leg in legs:
         ap, move, tail, sched_dt = leg["Airport"], leg["Movement"], leg["Tail"], leg["SchedDT"]
         day, month = sched_dt.day, sched_dt.month
+
         cand = ocs_df[
             (ocs_df["SlotAirport"] == ap) &
-            (ocs_df["Movement"]   == move) &
-            (ocs_df["Date"].apply(lambda d: isinstance(d, tuple) and d==(day, month)))
+            (ocs_df["Movement"] == move) &
+            (ocs_df["Date"].apply(lambda d: isinstance(d, tuple) and d == (day, month)))
         ]
+
         if cand.empty:
-            results["Missing"].append({**leg, "Reason":"No slot for airport/date/movement"})
+            results["Missing"].append({**leg, "Reason": "No slot for airport/date/movement"})
             continue
 
         window = WINDOWS_MIN.get(ap, 30)
@@ -304,35 +306,57 @@ def compare(fl3xx_df, ocs_df):
             hhmm = row["SlotTimeHHMM"]; hh = int(hhmm[:2]); mm = int(hhmm[2:])
             return datetime(sched_dt.year, month, day, hh, mm)
 
+        # Prefer same-tail
         same_tail = cand[cand["Tail"] == tail]
-
         if not same_tail.empty:
             deltas = same_tail.apply(lambda s: minutes_diff(sched_dt, ocs_dt(s)), axis=1)
             best_idx = deltas.idxmin()
             best_row = same_tail.loc[best_idx]
             best_delta = int(deltas.loc[best_idx])
             if best_delta <= window:
-                results["Matched"].append({**leg, "SlotTime": best_row["SlotTimeHHMM"],
-                                           "DeltaMin": best_delta, "SlotRef": best_row["SlotRef"]})
+                results["Matched"].append({**leg,
+                                           "SlotTime": best_row["SlotTimeHHMM"],
+                                           "DeltaMin": best_delta,
+                                           "SlotRef": best_row["SlotRef"]})
                 used_slot_refs.add(str(best_row["SlotRef"]))
             else:
-                results["Misaligned"].append({**leg, "NearestSlotTime": best_row["SlotTimeHHMM"],
+                results["Misaligned"].append({**leg,
+                                              "NearestSlotTime": best_row["SlotTimeHHMM"],
                                               "Issue": f"Outside {window} min window",
                                               "SlotRef": best_row["SlotRef"]})
+                # Not counted as stale; it corresponds to a leg (just misaligned)
         else:
+            # No exact tail match → choose closest any-tail for context
             deltas_any = cand.apply(lambda s: minutes_diff(sched_dt, ocs_dt(s)), axis=1)
             best_idx = deltas_any.idxmin()
             nearest = cand.loc[best_idx]
             best_delta = int(deltas_any.loc[best_idx])
             if best_delta <= window:
-                results["Misaligned"].append({**leg, "NearestSlotTime": nearest["SlotTimeHHMM"],
+                results["Misaligned"].append({**leg,
+                                              "NearestSlotTime": nearest["SlotTimeHHMM"],
                                               "Issue": f"Wrong tail (slot for {nearest['Tail']})",
                                               "SlotRef": nearest["SlotRef"]})
+                # Still not stale; there is a corresponding leg that should be fixed
             else:
                 results["Missing"].append({**leg, "Reason": "No matching tail/time within window"})
 
-    # Slots not used by any matched leg
-    stale_df = ocs_df[~ocs_df["SlotRef"].astype(str).isin(used_slot_refs)].copy()
+    # --- Slot-side evaluation (drives Stale)
+    # A slot is 'stale' if there is NO leg for the same airport/movement and same day+month
+    # (regardless of tail/time). If any leg exists for that day/movement/airport, the slot
+    # is not stale (it may be misaligned but should be fixed, not considered 'canceled').
+    def has_any_leg_for_slot(slot_row):
+        ap = slot_row["SlotAirport"]
+        mv = slot_row["Movement"]
+        day, month = slot_row["Date"]
+        for lg in legs:
+            if (lg["Airport"] == ap and lg["Movement"] == mv and
+                lg["SchedDT"].day == day and lg["SchedDT"].month == month):
+                return True
+        return False
+
+    stale_mask = ~ocs_df.apply(has_any_leg_for_slot, axis=1)
+    stale_df = ocs_df[stale_mask].copy()
+
     return results, stale_df
 
 
@@ -380,6 +404,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

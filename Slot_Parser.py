@@ -50,11 +50,12 @@ def _hhmm_str(x):
 
 # ---------------- OCS Parsing ----------------
 ocs_line_re = re.compile(
-    r""".*?(?P<date>\d{2}[A-Z]{3}).*?
-        (?P<maxpax>\d{3})(?P<acft>[A-Z0-9]{2,5}).*?
-        (?P<link_icao>[A-Z]{4})(?P<slot_time>\d{3,4}).*?
-        RE\.(?P<tail>[A-Z0-9]+).*?
-        \.(?P<slot_airport>[A-Z]{4})(?P<movement>[AD])(?P<slot_ref>[A-Z0-9]+)""",
+    r""".*?(?P<date>\d{2}[A-Z]{3})\s+              # date like 17SEP
+        (?P<maxpax>\d{3})(?P<acft>[A-Z0-9]{3,4})\s+ # pax + aircraft
+        (?P<link_icao>[A-Z]{4})(?P<slot_time>\d{4})\s+ # ICAO + slot time
+        [AD]\s*/\s*RE\.(?P<tail>[A-Z0-9]+)\s+        # movement + tail
+        ID[AD]\.(?P<slot_airport>[A-Z]{4})(?P<movement>[AD])(?P<slot_ref>[A-Z0-9]+)/ # airport/movement/ref
+     """,
     re.VERBOSE
 )
 
@@ -64,14 +65,14 @@ def parse_gir_file(file):
     col = df.columns[0]
     parsed = []
     for line in df[col].astype(str).tolist():
-        # Normalize whitespace
+        # Normalize whitespace (regular + NBSP)
         line = line.replace("\u00A0", " ")
         line = re.sub(r"\s+", " ", line.strip())
 
         m = ocs_line_re.search(line)
         if not m:
-            # print or collect bad lines for debug
-            print("NO MATCH:", repr(line[:100]))
+            # For remaining misses
+            print("NO MATCH:", repr(line[:120]))
             continue
 
         gd = m.groupdict()
@@ -89,8 +90,6 @@ def parse_gir_file(file):
 
     print(f"Parsed {len(parsed)} rows out of {len(df)}")
     return pd.DataFrame(parsed, columns=["SlotAirport","Date","Movement","SlotTimeHHMM","Tail","SlotRef"])
-
-
 
 
 
@@ -282,6 +281,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

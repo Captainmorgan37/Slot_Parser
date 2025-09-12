@@ -50,7 +50,7 @@ def _hhmm_str(x):
 
 # ---------------- OCS Parsing ----------------
 ocs_line_re = re.compile(
-    r"""^(?P<ignored>\S+)\s+
+    r"""^(?P<ignored>[A-Z0-9 ]+)\s+      # allow spaces inside ID
         (?P<date>\d{2}[A-Z]{3})\s+
         (?P<maxpax>\d{3})(?P<acft>[A-Z0-9]{3,4})\s+
         (?P<link_icao>[A-Z]{4})(?P<slot_time>\d{4}).*?
@@ -71,6 +71,7 @@ def parse_gir_file(file):
         if not m:
             continue
         gd = m.groupdict()
+        slot_id_raw = gd.get("ignored", "").replace(" ", "")
         day = int(gd["date"][:2]); month = MONTHS.get(gd["date"][2:5])
         parsed.append({
             "SlotAirport": gd["slot_airport"],
@@ -271,4 +272,5 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 

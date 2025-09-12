@@ -23,6 +23,33 @@ WINDOWS_MIN = {"CYYC": 30, "CYVR": 30, "CYYZ": 60, "CYUL": 15}
 MONTHS = {m: i for i, m in enumerate(
     ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"], 1)}
 
+# Pretty month names for displaying Date tuples like (13, 9)
+MONTH_ABBR = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
+
+def with_datestr(df: pd.DataFrame, date_col="Date"):
+    """Add a human-friendly DateStr column next to the Date tuple."""
+    if df is None or df.empty or date_col not in df.columns:
+        return df
+    out = df.copy()
+
+    def fmt(d):
+        try:
+            day, month = d
+            abbr = MONTH_ABBR.get(int(month), str(month))
+            return f"{int(day):02d}-{abbr}"
+        except Exception:
+            return d
+
+    out["DateStr"] = out[date_col].apply(fmt)
+
+    # place DateStr right after Date
+    cols = list(out.columns)
+    if "DateStr" in cols and date_col in cols:
+        cols.insert(cols.index(date_col) + 1, cols.pop(cols.index("DateStr")))
+        out = out[cols]
+    return out
+
+
 SLOT_AIRPORTS = set(WINDOWS_MIN.keys())
 
 # ---------------- Helpers ----------------
@@ -438,6 +465,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

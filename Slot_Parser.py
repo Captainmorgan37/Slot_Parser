@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import re
+import os
 from datetime import datetime
 
 st.set_page_config(page_title="OCS vs Fl3xx Slot Compliance", layout="wide")
@@ -23,6 +24,24 @@ MONTHS = {m: i for i, m in enumerate(
     ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"], 1)}
 
 SLOT_AIRPORTS = set(WINDOWS_MIN.keys())
+
+# ---------------- Tail filtering ----------------
+def load_tails(path="tails.csv"):
+    if not os.path.exists(path):
+        print(f"No tail list found at {path}, skipping filter")
+        return []
+    try:
+        df = pd.read_csv(path)
+        return df["Tail"].astype(str).str.replace("-", "").str.upper().tolist()
+    except Exception as e:
+        print(f"Error reading tail list: {e}")
+        return []
+
+TAILS = load_tails()
+if TAILS:
+    st.sidebar.success(f"Loaded {len(TAILS)} company tails from tails.csv")
+else:
+    st.sidebar.warning("No tails.csv found — showing all OCS slots")
 
 # ---------------- Utils ----------------
 def _read_csv_reset(file, **kwargs):
@@ -67,9 +86,7 @@ def _hhmm_str(x):
 
     return s
 
-
 # ---------------- OCS Parsing ----------------
-# --- Split-based GIR parser (CYYZ) ---
 def parse_gir_file(file):
     df = _read_csv_reset(file)
     col = df.columns[0]
@@ -83,11 +100,8 @@ def parse_gir_file(file):
         try:
             date_str = parts[2]
             pax_type = parts[3]
-            pax = pax_type[:3]
-            acft = pax_type[3:]
             icao_time = parts[4]
-            link_icao, slot_time = icao_time[-4:], icao_time[:-4]
-            movement_mid = parts[5]
+            slot_time = icao_time[:-4]
 
             tail_token = next(p for p in parts if p.startswith("RE."))
             tail = tail_token.replace("RE.","")
@@ -115,38 +129,26 @@ def parse_gir_file(file):
     print(f"Parsed {len(parsed)} GIR rows out of {len(df)}")
     return pd.DataFrame(parsed, columns=["SlotAirport","Date","Movement","SlotTimeHHMM","Tail","SlotRef"])
 
-# --- Structured parser (CYYC, CYVR, CYUL) ---
 def parse_structured_file(file):
     df = _read_csv_reset(file)
     df.columns = [re.sub(r"[^A-Za-z0-9]", "", c).upper() for c in df.columns]
 
     rows = []
-    skipped = 0
-
-    for i, r in df.iterrows():
+    for _, r in df.iterrows():
         ap = r.get("AP")
         date_val = str(r.get("DATE")).strip()
         if pd.isna(ap) or not date_val:
-            skipped += 1
-            print(f"Row {i} skipped, missing AP or DATE: {r.to_dict()}")
             continue
 
-        # Take first half of "13SEP 13SEP"
         token = date_val.split()[0] if " " in date_val else date_val
         if not re.match(r"\d{2}[A-Z]{3}", token):
-            skipped += 1
-            print(f"Row {i} skipped, bad date: {repr(date_val)}")
             continue
         day = int(token[:2])
         month = MONTHS.get(token[2:5].upper())
         if not month:
-            skipped += 1
-            print(f"Row {i} skipped, bad month in date: {repr(date_val)}")
             continue
 
         tail = str(r.get("ACREG", "")).replace("-", "").upper()
-
-        added = False
 
         # Arrival
         atime = _hhmm_str(r.get("ATIME"))
@@ -160,7 +162,6 @@ def parse_structured_file(file):
                 "Tail": tail,
                 "SlotRef": str(aslot)
             })
-            added = True
 
         # Departure
         dtime = _hhmm_str(r.get("DTIME"))
@@ -174,15 +175,9 @@ def parse_structured_file(file):
                 "Tail": tail,
                 "SlotRef": str(dslot)
             })
-            added = True
 
-        if not added:
-            skipped += 1
-            print(f"Row {i} skipped, no A/D times or slots: {r.to_dict()}")
-
-    print(f"Parsed {len(rows)} structured slots, skipped {skipped} rows out of {len(df)}")
+    print(f"Parsed {len(rows)} structured rows out of {len(df)}")
     return pd.DataFrame(rows, columns=["SlotAirport","Date","Movement","SlotTimeHHMM","Tail","SlotRef"])
-
 
 def parse_ocs_file(file):
     head = _read_csv_reset(file, nrows=5)
@@ -299,6 +294,12 @@ if fl3xx_files and ocs_files:
     ocs_list = [df for df in ocs_list if not df.empty]
     ocs_df = pd.concat(ocs_list, ignore_index=True) if ocs_list else pd.DataFrame(columns=["SlotAirport","Date","Movement","SlotTimeHHMM","Tail","SlotRef"])
 
+    # Filter OCS slots by tails.csv
+    if TAILS:
+        before = len(ocs_df)
+        ocs_df = ocs_df[ocs_df["Tail"].isin(TAILS)]
+        st.info(f"Filtered OCS slots: {before} → {len(ocs_df)} using company tail list")
+
     st.success(f"Loaded {len(fl3xx_df)} flights and {len(ocs_df)} slots.")
 
     with st.expander("🔎 Preview parsed OCS (normalized)"):
@@ -327,7 +328,3 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
-
-
-
-

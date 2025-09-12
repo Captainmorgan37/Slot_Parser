@@ -64,6 +64,9 @@ def parse_gir_file(file):
     col = df.columns[0]
     parsed = []
     for line in df[col].astype(str).tolist():
+        # normalize slot ID spacing at start
+        line = re.sub(r"^(\w)\s+(\w+)", r"\1\2", line.strip())
+
         m = ocs_line_re.search(line)
         if not m:
             continue
@@ -78,6 +81,7 @@ def parse_gir_file(file):
             "SlotRef": gd["slot_ref"]
         })
     return pd.DataFrame(parsed, columns=["SlotAirport","Date","Movement","SlotTimeHHMM","Tail","SlotRef"])
+
 
 def parse_structured_file(file):
     df = _read_csv_reset(file)
@@ -267,3 +271,4 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+

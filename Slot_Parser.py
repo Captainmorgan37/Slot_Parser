@@ -308,25 +308,17 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
         ]
 
         if cand.empty:
+            # CYVR: don't flag Missing if 4+ days away (can't book yet)
             if _cyvr_future_exempt(ap, sched_dt):
-                # Skip flagging as Missing; CYVR can’t book this far ahead
                 continue
-            results["Missing"].append({**leg, "Reason":"No slot for airport/date/movement"})
+            results["Missing"].append({**leg, "Reason": "No slot for airport/date/movement"})
             continue
-
-            else:
-        # ... after computing best_delta and deciding it’s not within window
-        if _cyvr_future_exempt(ap, sched_dt):
-            # Skip flagging as Missing for far-future CYVR
-            continue
-        results["Missing"].append({**leg, "Reason": "No matching tail/time within window"})
-
-
 
         window = WINDOWS_MIN.get(ap, 30)
 
         def ocs_dt(row):
-            hhmm = row["SlotTimeHHMM"]; hh = int(hhmm[:2]); mm = int(hhmm[2:])
+            hhmm = row["SlotTimeHHMM"]
+            hh = int(hhmm[:2]); mm = int(hhmm[2:])
             return datetime(sched_dt.year, month, day, hh, mm)
 
         # Prefer same-tail
@@ -347,9 +339,9 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
                                               "NearestSlotTime": best_row["SlotTimeHHMM"],
                                               "Issue": f"Outside {window} min window",
                                               "SlotRef": best_row["SlotRef"]})
-                # Not counted as stale; it corresponds to a leg (just misaligned)
+                # Not counted as Missing; it's actionable but not stale/can't-book
         else:
-            # No exact tail match → choose closest any-tail for context
+            # No exact tail match → pick closest any-tail for context
             deltas_any = cand.apply(lambda s: minutes_diff(sched_dt, ocs_dt(s)), axis=1)
             best_idx = deltas_any.idxmin()
             nearest = cand.loc[best_idx]
@@ -359,14 +351,13 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
                                               "NearestSlotTime": nearest["SlotTimeHHMM"],
                                               "Issue": f"Wrong tail (slot for {nearest['Tail']})",
                                               "SlotRef": nearest["SlotRef"]})
-                # Still not stale; there is a corresponding leg that should be fixed
             else:
+                # CYVR: don't flag Missing if 4+ days away
+                if _cyvr_future_exempt(ap, sched_dt):
+                    continue
                 results["Missing"].append({**leg, "Reason": "No matching tail/time within window"})
 
     # --- Slot-side evaluation (drives Stale)
-    # A slot is 'stale' if there is NO leg for the same airport/movement and same day+month
-    # (regardless of tail/time). If any leg exists for that day/movement/airport, the slot
-    # is not stale (it may be misaligned but should be fixed, not considered 'canceled').
     def has_any_leg_for_slot(slot_row):
         ap = slot_row["SlotAirport"]
         mv = slot_row["Movement"]
@@ -381,6 +372,7 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
     stale_df = ocs_df[stale_mask].copy()
 
     return results, stale_df
+
 
 
 # ---------------- UI ----------------
@@ -427,6 +419,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

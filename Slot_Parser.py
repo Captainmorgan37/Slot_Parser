@@ -456,34 +456,54 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
         if not _cyvr_future_exempt(ap, sched_dt):
             results["Missing"].append({**leg, "Reason": "No matching tail/time within window"})
 
-        # --- Slot-side evaluation (Stale)
-        # A slot is NOT stale if:
-        #   (a) there is ANY leg with same airport/movement/TAIL within ±1 day of the slot's date, or
-        #   (b) we've already used it (Matched) or suggested it (Tail mismatch).
-        def has_leg_for_slot(slot_row):
-            ap   = slot_row["SlotAirport"]
-            mv   = slot_row["Movement"]
-            tail = slot_row["Tail"]
-            day, month = slot_row["Date"]
-    
-            for lg in legs:
-                if lg["Airport"] != ap or lg["Movement"] != mv or lg["Tail"] != tail:
-                    continue
-                # build the slot date using the leg's year (slots have no year)
-                slot_date = datetime(lg["SchedDT"].year, month, day).date()
-                if abs((slot_date - lg["SchedDT"].date()).days) <= 1:
+    # --- Slot-side evaluation (Stale)
+    # A slot is NOT stale if:
+    #   (a) there is ANY leg with same airport/movement/TAIL within ±1 day of the slot's date, or
+    #   (b) we've already used it (Matched) or suggested it (Tail mismatch), or
+    #   (c) it's a far-future wrong-tail case (we suppress tail mismatches 5+ days out).
+    def has_leg_for_slot(slot_row):
+        ap   = slot_row["SlotAirport"]
+        mv   = slot_row["Movement"]
+        tail = slot_row["Tail"]
+        day, month = slot_row["Date"]
+
+        for lg in legs:
+            if lg["Airport"] != ap or lg["Movement"] != mv or lg["Tail"] != tail:
+                continue
+            # build slot date using leg's year (slots have no year)
+            slot_date = datetime(lg["SchedDT"].year, month, day).date()
+            if abs((slot_date - lg["SchedDT"].date()).days) <= 1:
+                return True
+        return False
+
+    def _far_future_wrong_tail(slot_row):
+        ap   = slot_row["SlotAirport"]
+        mv   = slot_row["Movement"]
+        tail = slot_row["Tail"]
+        day, month = slot_row["Date"]
+        for lg in legs:
+            if lg["Airport"] != ap or lg["Movement"] != mv:
+                continue
+            # slot date in the leg's year
+            slot_date = datetime(lg["SchedDT"].year, month, day).date()
+            # same day ±1 indicates this slot relates to that leg's operation
+            if abs((slot_date - lg["SchedDT"].date()).days) <= 1:
+                # wrong tail & we intentionally suppress tail mismatches far in the future
+                if lg["Tail"] != tail and _tail_future_exempt(lg["SchedDT"], threshold_days=5):
                     return True
-            return False
-    
-        # Slots already used (Matched) or suggested (Tail mismatch) should not be stale
-        used_or_suggested = set()
-        used_or_suggested.update(allocated_slot_refs)
-        used_or_suggested.update(suggested_slot_refs)
-    
-        stale_df = ocs_df[
-            (~ocs_df["SlotRef"].astype(str).isin(used_or_suggested)) &
-            (~ocs_df.apply(has_leg_for_slot, axis=1))
-        ].copy()
+        return False
+
+    # Slots already used (Matched) or suggested (Tail mismatch) should not be stale
+    used_or_suggested = set()
+    used_or_suggested.update(allocated_slot_refs)
+    used_or_suggested.update(suggested_slot_refs)
+
+    stale_df = ocs_df[
+        (~ocs_df["SlotRef"].astype(str).isin(used_or_suggested)) &
+        (~ocs_df.apply(has_leg_for_slot, axis=1)) &
+        (~ocs_df.apply(_far_future_wrong_tail, axis=1))
+    ].copy()
+
 
 
 
@@ -533,6 +553,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

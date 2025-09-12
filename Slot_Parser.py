@@ -25,6 +25,17 @@ MONTHS = {m: i for i, m in enumerate(
 
 SLOT_AIRPORTS = set(WINDOWS_MIN.keys())
 
+# ---------------- Helpers ----------------
+def _cyvr_future_exempt(ap: str, sched_dt: pd.Timestamp, threshold_days: int = 4) -> bool:
+    """Return True if this should NOT be flagged as Missing:
+       CYVR legs that are threshold_days or more days in the future."""
+    if ap != "CYVR" or pd.isna(sched_dt):
+        return False
+    today = pd.Timestamp.utcnow().date()
+    days_out = (sched_dt.date() - today).days
+    return days_out >= threshold_days
+
+
 # ---------------- Tail filtering ----------------
 def load_tails(path="tails.csv"):
     if not os.path.exists(path):
@@ -297,8 +308,20 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
         ]
 
         if cand.empty:
-            results["Missing"].append({**leg, "Reason": "No slot for airport/date/movement"})
+            if _cyvr_future_exempt(ap, sched_dt):
+                # Skip flagging as Missing; CYVR can’t book this far ahead
+                continue
+            results["Missing"].append({**leg, "Reason":"No slot for airport/date/movement"})
             continue
+
+            else:
+        # ... after computing best_delta and deciding it’s not within window
+        if _cyvr_future_exempt(ap, sched_dt):
+            # Skip flagging as Missing for far-future CYVR
+            continue
+        results["Missing"].append({**leg, "Reason": "No matching tail/time within window"})
+
+
 
         window = WINDOWS_MIN.get(ap, 30)
 
@@ -404,6 +427,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

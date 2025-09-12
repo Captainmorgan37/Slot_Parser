@@ -7,7 +7,7 @@ st.set_page_config(page_title="OCS vs Fl3xx Slot Compliance", layout="wide")
 st.title("🛫 OCS vs Fl3xx Slot Compliance")
 
 st.markdown("""
-Upload **Fl3xx CSV(s)** and **OCS CSV(s)** (GIR free-text or structured export).
+Upload **Fl3xx CSV(s)** and **OCS CSV(s)** (CYYZ GIR free-text or structured export).
 This tool normalizes both formats and compares them against Fl3xx with airport-specific time windows.
 
 **Results**
@@ -26,7 +26,6 @@ SLOT_AIRPORTS = set(WINDOWS_MIN.keys())
 
 # ---------------- Utils ----------------
 def _read_csv_reset(file, **kwargs):
-    """Safe read_csv for Streamlit uploads. Resets pointer and supports latin-1 fallback."""
     file.seek(0)
     try:
         return pd.read_csv(file, **kwargs)
@@ -35,11 +34,10 @@ def _read_csv_reset(file, **kwargs):
         return pd.read_csv(file, encoding="latin-1", **kwargs)
 
 def _hhmm_str(x):
-    """Return zero-padded HHMM string for various input types (int/float/str)."""
     if pd.isna(x):
         return None
     s = str(x).strip()
-    if "." in s:  # handle Excel float like 925.0
+    if "." in s:
         s = s.split(".")[0]
     s = re.sub(r"\D", "", s)
     if len(s) == 3:
@@ -49,50 +47,53 @@ def _hhmm_str(x):
     return s.zfill(4)
 
 # ---------------- OCS Parsing ----------------
-ocs_line_re = re.compile(
-    r""".*?(?P<date>\d{2}[A-Z]{3})\s+              # date like 17SEP
-        (?P<maxpax>\d{3})(?P<acft>[A-Z0-9]{3,4})\s+ # pax + aircraft
-        (?P<link_icao>[A-Z]{4})(?P<slot_time>\d{4})\s+ # ICAO + slot time
-        [AD]\s*/\s*RE\.(?P<tail>[A-Z0-9]+)\s+        # movement + tail
-        ID[AD]\.(?P<slot_airport>[A-Z]{4})(?P<movement>[AD])(?P<slot_ref>[A-Z0-9]+)/ # airport/movement/ref
-     """,
-    re.VERBOSE
-)
-
-
+# --- Split-based GIR parser (CYYZ) ---
 def parse_gir_file(file):
     df = _read_csv_reset(file)
     col = df.columns[0]
     parsed = []
     for line in df[col].astype(str).tolist():
-        # Normalize whitespace (regular + NBSP)
         line = line.replace("\u00A0", " ")
         line = re.sub(r"\s+", " ", line.strip())
+        parts = line.split(" ")
+        if len(parts) < 7:
+            continue
+        try:
+            date_str = parts[2]
+            pax_type = parts[3]
+            pax = pax_type[:3]
+            acft = pax_type[3:]
+            icao_time = parts[4]
+            link_icao, slot_time = icao_time[-4:], icao_time[:-4]
+            movement_mid = parts[5]
 
-        m = ocs_line_re.search(line)
-        if not m:
-            # For remaining misses
-            print("NO MATCH:", repr(line[:120]))
+            tail_token = next(p for p in parts if p.startswith("RE."))
+            tail = tail_token.replace("RE.","")
+
+            slot_token = next(p for p in parts if p.startswith("ID"))
+            m = re.match(r"ID[AD]\.(?P<apt>[A-Z]{4})(?P<mov>[AD])(?P<ref>[A-Z0-9]+)/", slot_token)
+            if not m:
+                continue
+
+            gd = m.groupdict()
+            day = int(date_str[:2])
+            month = MONTHS.get(date_str[2:5])
+
+            parsed.append({
+                "SlotAirport": gd["apt"],
+                "Date": (day, month),
+                "Movement": "ARR" if gd["mov"] == "A" else "DEP",
+                "SlotTimeHHMM": _hhmm_str(slot_time),
+                "Tail": tail.upper(),
+                "SlotRef": gd["ref"]
+            })
+        except Exception:
             continue
 
-        gd = m.groupdict()
-        day = int(gd["date"][:2])
-        month = MONTHS.get(gd["date"][2:5])
-
-        parsed.append({
-            "SlotAirport": gd["slot_airport"],
-            "Date": (day, month),
-            "Movement": "ARR" if gd["movement"] == "A" else "DEP",
-            "SlotTimeHHMM": _hhmm_str(gd["slot_time"]),
-            "Tail": gd["tail"].upper(),
-            "SlotRef": gd["slot_ref"]
-        })
-
-    print(f"Parsed {len(parsed)} rows out of {len(df)}")
+    print(f"Parsed {len(parsed)} GIR rows out of {len(df)}")
     return pd.DataFrame(parsed, columns=["SlotAirport","Date","Movement","SlotTimeHHMM","Tail","SlotRef"])
 
-
-
+# --- Structured parser (CYYC, CYVR, CYUL) ---
 def parse_structured_file(file):
     df = _read_csv_reset(file)
     df.columns = [re.sub(r"[^A-Za-z0-9]", "", c).upper() for c in df.columns]
@@ -136,6 +137,7 @@ def parse_structured_file(file):
                 "SlotRef": str(dslot)
             })
 
+    print(f"Parsed {len(rows)} structured rows")
     return pd.DataFrame(rows, columns=["SlotAirport","Date","Movement","SlotTimeHHMM","Tail","SlotRef"])
 
 def parse_ocs_file(file):
@@ -281,10 +283,3 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
-
-
-
-
-
-
-

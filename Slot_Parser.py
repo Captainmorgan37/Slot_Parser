@@ -456,26 +456,35 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
         if not _cyvr_future_exempt(ap, sched_dt):
             results["Missing"].append({**leg, "Reason": "No matching tail/time within window"})
 
-    # --- Slot-side evaluation (Stale)
-    # A slot is NOT stale if there is ANY leg with the same airport/movement/TAIL
-    # whose date is the same day or ±1 day of the slot's day (cross-midnight tolerance).
-    def has_leg_for_slot(slot_row):
-        ap   = slot_row["SlotAirport"]
-        mv   = slot_row["Movement"]
-        tail = slot_row["Tail"]
-        day, month = slot_row["Date"]
+        # --- Slot-side evaluation (Stale)
+        # A slot is NOT stale if:
+        #   (a) there is ANY leg with same airport/movement/TAIL within ±1 day of the slot's date, or
+        #   (b) we've already used it (Matched) or suggested it (Tail mismatch).
+        def has_leg_for_slot(slot_row):
+            ap   = slot_row["SlotAirport"]
+            mv   = slot_row["Movement"]
+            tail = slot_row["Tail"]
+            day, month = slot_row["Date"]
     
-        for lg in legs:
-            if lg["Airport"] != ap or lg["Movement"] != mv or lg["Tail"] != tail:
-                continue
-            # build the slot date using the leg's year (slots have no year)
-            slot_date = datetime(lg["SchedDT"].year, month, day).date()
-            if abs((slot_date - lg["SchedDT"].date()).days) <= 1:
-                return True
-        return False
+            for lg in legs:
+                if lg["Airport"] != ap or lg["Movement"] != mv or lg["Tail"] != tail:
+                    continue
+                # build the slot date using the leg's year (slots have no year)
+                slot_date = datetime(lg["SchedDT"].year, month, day).date()
+                if abs((slot_date - lg["SchedDT"].date()).days) <= 1:
+                    return True
+            return False
     
-    stale_mask = ~ocs_df.apply(has_leg_for_slot, axis=1)
-    stale_df = ocs_df[stale_mask].copy()
+        # Slots already used (Matched) or suggested (Tail mismatch) should not be stale
+        used_or_suggested = set()
+        used_or_suggested.update(allocated_slot_refs)
+        used_or_suggested.update(suggested_slot_refs)
+    
+        stale_df = ocs_df[
+            (~ocs_df["SlotRef"].astype(str).isin(used_or_suggested)) &
+            (~ocs_df.apply(has_leg_for_slot, axis=1))
+        ].copy()
+
 
 
     return results, stale_df
@@ -524,6 +533,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

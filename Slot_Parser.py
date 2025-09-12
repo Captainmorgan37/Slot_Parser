@@ -34,17 +34,39 @@ def _read_csv_reset(file, **kwargs):
         return pd.read_csv(file, encoding="latin-1", **kwargs)
 
 def _hhmm_str(x):
+    """Convert various input formats into zero-padded HHMM string."""
     if pd.isna(x):
         return None
     s = str(x).strip()
-    if "." in s:
-        s = s.split(".")[0]
+
+    # Handle floats like 15.0, 930.0
+    if re.match(r"^\d+\.0$", s):
+        s = s[:-2]
+
+    # Handle cases like 9:30 or 09:30
+    if ":" in s:
+        parts = s.split(":")
+        if len(parts) == 2:
+            hh, mm = parts
+            return hh.zfill(2) + mm.zfill(2)
+
+    # Remove non-digits
     s = re.sub(r"\D", "", s)
-    if len(s) == 3:
-        s = "0" + s
-    if len(s) < 3 or len(s) > 4:
+
+    # Accept 1–4 digit numbers
+    if len(s) == 1:   # "5" → "0005"
+        s = s.zfill(4)
+    elif len(s) == 2: # "15" → "0015"
+        s = s.zfill(4)
+    elif len(s) == 3: # "930" → "0930"
+        s = s.zfill(4)
+    elif len(s) == 4: # "1530" → "1530"
+        pass
+    else:
         return None
-    return s.zfill(4)
+
+    return s
+
 
 # ---------------- OCS Parsing ----------------
 # --- Split-based GIR parser (CYYZ) ---
@@ -305,6 +327,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

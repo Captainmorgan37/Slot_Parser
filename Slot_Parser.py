@@ -76,8 +76,8 @@ def show_table(df: pd.DataFrame, title: str, key: str):
         key=f"dl_{key}"
     )
 
-def _tail_future_exempt(sched_dt: pd.Timestamp, threshold_days: int = 5) -> bool:
-    """Hide tail-mismatch items when the leg is >= threshold_days in the future."""
+def _tail_future_exempt(sched_dt: pd.Timestamp, threshold_days: int = 3) -> bool:
+    """Hide tail-mismatch items when the leg is >= threshold_days (3+) days in the future."""
     if pd.isna(sched_dt):
         return False
     today = pd.Timestamp.utcnow().date()
@@ -428,7 +428,7 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
 
         # 2) any-tail within window → Tail mismatch (do NOT allocate; wrong tail booked)
         if any_best <= window:
-            if not _tail_future_exempt(sched_dt, threshold_days=5):  # your helper
+            if not _tail_future_exempt(sched_dt, threshold_days=3):  # your helper
                 if str(any_row["SlotRef"]) not in suggested_slot_refs:
                     results["MisalignedTail"].append({
                         **leg,
@@ -489,7 +489,7 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
             # same day ±1 indicates this slot relates to that leg's operation
             if abs((slot_date - lg["SchedDT"].date()).days) <= 1:
                 # wrong tail & we intentionally suppress tail mismatches far in the future
-                if lg["Tail"] != tail and _tail_future_exempt(lg["SchedDT"], threshold_days=5):
+                if lg["Tail"] != tail and _tail_future_exempt(lg["SchedDT"], threshold_days=3):
                     return True
         return False
 
@@ -553,6 +553,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

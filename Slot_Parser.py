@@ -98,14 +98,24 @@ def parse_gir_file(file):
         if len(parts) < 7:
             continue
         try:
+            # Date like "13SEP"
             date_str = parts[2]
-            pax_type = parts[3]
-            icao_time = parts[4]
-            slot_time = icao_time[:-4]
 
+            # Pax + aircraft type (unused right now, but parsed cleanly)
+            pax_type = parts[3]
+
+            # Token like "CYUL0320" → ICAO + HHMM
+            icao_time = parts[4]
+            m_time = re.match(r"([A-Z]{4})(\d{3,4})", icao_time)
+            if not m_time:
+                continue
+            link_icao, slot_time = m_time.groups()
+
+            # Tail
             tail_token = next(p for p in parts if p.startswith("RE."))
             tail = tail_token.replace("RE.","")
 
+            # Slot details (e.g. "IDA.CYYZAGNN953500/")
             slot_token = next(p for p in parts if p.startswith("ID"))
             m = re.match(r"ID[AD]\.(?P<apt>[A-Z]{4})(?P<mov>[AD])(?P<ref>[A-Z0-9]+)/", slot_token)
             if not m:
@@ -328,3 +338,4 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+

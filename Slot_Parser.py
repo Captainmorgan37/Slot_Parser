@@ -456,19 +456,27 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
         if not _cyvr_future_exempt(ap, sched_dt):
             results["Missing"].append({**leg, "Reason": "No matching tail/time within window"})
 
-    # --- Slot-side evaluation (Stale)
-    # A slot is 'stale' if there is NO leg for the same airport/movement/date AND same tail.
-    def has_leg_for_slot(slot_row):
-        ap = slot_row["SlotAirport"]; mv = slot_row["Movement"]; tail = slot_row["Tail"]
-        d, m = slot_row["Date"]
-        for lg in legs:
-            if (lg["Airport"] == ap and lg["Movement"] == mv and lg["Tail"] == tail and
-                lg["SchedDT"].day == d and lg["SchedDT"].month == m):
-                return True
-        return False
+# --- Slot-side evaluation (Stale)
+# A slot is NOT stale if there is ANY leg with the same airport/movement/TAIL
+# whose date is the same day or ±1 day of the slot's day (cross-midnight tolerance).
+def has_leg_for_slot(slot_row):
+    ap   = slot_row["SlotAirport"]
+    mv   = slot_row["Movement"]
+    tail = slot_row["Tail"]
+    day, month = slot_row["Date"]
 
-    stale_mask = ~ocs_df.apply(has_leg_for_slot, axis=1)
-    stale_df = ocs_df[stale_mask].copy()
+    for lg in legs:
+        if lg["Airport"] != ap or lg["Movement"] != mv or lg["Tail"] != tail:
+            continue
+        # build the slot date using the leg's year (slots have no year)
+        slot_date = datetime(lg["SchedDT"].year, month, day).date()
+        if abs((slot_date - lg["SchedDT"].date()).days) <= 1:
+            return True
+    return False
+
+stale_mask = ~ocs_df.apply(has_leg_for_slot, axis=1)
+stale_df = ocs_df[stale_mask].copy()
+
 
     return results, stale_df
 
@@ -516,6 +524,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

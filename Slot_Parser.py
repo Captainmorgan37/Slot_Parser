@@ -62,6 +62,20 @@ def _cyvr_future_exempt(ap: str, sched_dt: pd.Timestamp, threshold_days: int = 4
     days_out = (sched_dt.date() - today).days
     return days_out >= threshold_days
 
+def show_table(df: pd.DataFrame, title: str, key: str):
+    st.subheader(title)
+    if df is None or df.empty:
+        st.write("— no rows —")
+        return
+    st.dataframe(df, use_container_width=True)
+    st.download_button(
+        f"Download {title} CSV",
+        df.to_csv(index=False).encode("utf-8"),
+        file_name=f"{key}.csv",
+        mime="text/csv",
+        key=f"dl_{key}"
+    )
+
 
 # ---------------- Tail filtering ----------------
 def load_tails(path="tails.csv"):
@@ -465,6 +479,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

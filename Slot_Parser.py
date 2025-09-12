@@ -279,7 +279,8 @@ def parse_fl3xx_file(file):
 
 # ---------------- Comparison ----------------
 def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
-    results = {"Matched": [], "Missing": [], "Misaligned": []}
+    # New: split misaligned into tail vs time
+    results = {"Matched": [], "Missing": [], "MisalignedTail": [], "MisalignedTime": []}
 
     # Build Fl3xx legs at slot airports
     legs = []
@@ -294,17 +295,10 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
             legs.append({"Flight": r.get("Booking"), "Tail": tail, "Airport": from_ap,
                          "Movement": "DEP", "SchedDT": r.get("OffBlock")})
 
-    def minutes_diff(a, b):
-        return abs(int((a - b).total_seconds() // 60))
-
-    used_slot_refs = set()
-
-        # De-duplicate legs so the same flight isn't processed twice
+    # De-duplicate legs so the same flight isn't processed twice
     if legs:
         legs_df = pd.DataFrame(legs)
-        # Normalize time to minute so tiny diffs don't create dup keys
         legs_df["SchedDT"] = pd.to_datetime(legs_df["SchedDT"]).dt.floor("min")
-        # Build a stable key per unique leg
         legs_df["LegKey"] = (
             legs_df["Flight"].astype(str) + "|" +
             legs_df["Tail"].astype(str) + "|" +
@@ -315,8 +309,10 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
         legs_df = legs_df.drop_duplicates(subset="LegKey").drop(columns="LegKey")
         legs = legs_df.to_dict("records")
 
+    def minutes_diff(a, b):
+        return abs(int((a - b).total_seconds() // 60))
 
-    # --- Leg-side matching (drives Matched / Misaligned / Missing)
+    # --- Leg-side matching (drives Matched / Misaligned* / Missing)
     for leg in legs:
         ap, move, tail, sched_dt = leg["Airport"], leg["Movement"], leg["Tail"], leg["SchedDT"]
         day, month = sched_dt.day, sched_dt.month
@@ -328,8 +324,7 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
         ]
 
         if cand.empty:
-            # CYVR: don't flag Missing if 4+ days away (can't book yet)
-            if _cyvr_future_exempt(ap, sched_dt):
+            if _cyvr_future_exempt(ap, sched_dt):  # your helper
                 continue
             results["Missing"].append({**leg, "Reason": "No slot for airport/date/movement"})
             continue
@@ -337,47 +332,57 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
         window = WINDOWS_MIN.get(ap, 30)
 
         def ocs_dt(row):
-            hhmm = row["SlotTimeHHMM"]
-            hh = int(hhmm[:2]); mm = int(hhmm[2:])
+            hhmm = row["SlotTimeHHMM"]; hh = int(hhmm[:2]); mm = int(hhmm[2:])
             return datetime(sched_dt.year, month, day, hh, mm)
 
-        # Prefer same-tail
+        # Prefer same-tail (decides if it's a time mismatch)
         same_tail = cand[cand["Tail"] == tail]
         if not same_tail.empty:
             deltas = same_tail.apply(lambda s: minutes_diff(sched_dt, ocs_dt(s)), axis=1)
             best_idx = deltas.idxmin()
             best_row = same_tail.loc[best_idx]
             best_delta = int(deltas.loc[best_idx])
+
             if best_delta <= window:
-                results["Matched"].append({**leg,
-                                           "SlotTime": best_row["SlotTimeHHMM"],
-                                           "DeltaMin": best_delta,
-                                           "SlotRef": best_row["SlotRef"]})
-                used_slot_refs.add(str(best_row["SlotRef"]))
+                results["Matched"].append({
+                    **leg,
+                    "SlotTime": best_row["SlotTimeHHMM"],
+                    "DeltaMin": best_delta,
+                    "SlotRef": best_row["SlotRef"]
+                })
             else:
-                results["Misaligned"].append({**leg,
-                                              "NearestSlotTime": best_row["SlotTimeHHMM"],
-                                              "Issue": f"Outside {window} min window",
-                                              "SlotRef": best_row["SlotRef"]})
-                # Not counted as Missing; it's actionable but not stale/can't-book
+                # TIME mismatch (correct tail, outside window)
+                results["MisalignedTime"].append({
+                    **leg,
+                    "NearestSlotTime": best_row["SlotTimeHHMM"],
+                    "DeltaMin": best_delta,
+                    "WindowMin": window,
+                    "SlotRef": best_row["SlotRef"]
+                })
         else:
-            # No exact tail match → pick closest any-tail for context
+            # No exact tail match → check nearest any-tail (this is a TAIL mismatch if within window)
             deltas_any = cand.apply(lambda s: minutes_diff(sched_dt, ocs_dt(s)), axis=1)
             best_idx = deltas_any.idxmin()
             nearest = cand.loc[best_idx]
             best_delta = int(deltas_any.loc[best_idx])
+
             if best_delta <= window:
-                results["Misaligned"].append({**leg,
-                                              "NearestSlotTime": nearest["SlotTimeHHMM"],
-                                              "Issue": f"Wrong tail (slot for {nearest['Tail']})",
-                                              "SlotRef": nearest["SlotRef"]})
+                # TAIL mismatch (time okay, but wrong tail booked)
+                results["MisalignedTail"].append({
+                    **leg,
+                    "NearestSlotTime": nearest["SlotTimeHHMM"],
+                    "DeltaMin": best_delta,
+                    "WindowMin": window,
+                    "SlotTail": nearest["Tail"],
+                    "SlotRef": nearest["SlotRef"]
+                })
             else:
-                # CYVR: don't flag Missing if 4+ days away
+                # No usable slot (wrong tail and outside time window)
                 if _cyvr_future_exempt(ap, sched_dt):
                     continue
                 results["Missing"].append({**leg, "Reason": "No matching tail/time within window"})
 
-    # --- Slot-side evaluation (drives Stale)
+    # --- Slot-side evaluation (Stale) — unchanged: a slot is stale only if no leg exists for same airport/movement/date
     def has_any_leg_for_slot(slot_row):
         ap = slot_row["SlotAirport"]
         mv = slot_row["Movement"]
@@ -392,8 +397,6 @@ def compare(fl3xx_df: pd.DataFrame, ocs_df: pd.DataFrame):
     stale_df = ocs_df[stale_mask].copy()
 
     return results, stale_df
-
-
 
 # ---------------- UI ----------------
 fl3xx_files = st.file_uploader("Upload Fl3xx CSV(s)", type="csv", accept_multiple_files=True)
@@ -419,26 +422,23 @@ if fl3xx_files and ocs_files:
         st.dataframe(fl3xx_df.head(20))
 
     results, stale = compare(fl3xx_df, ocs_df)
+    
+    matched_df       = pd.DataFrame(results["Matched"])
+    missing_df       = pd.DataFrame(results["Missing"])
+    mis_tail_df      = pd.DataFrame(results["MisalignedTail"])
+    mis_time_df      = pd.DataFrame(results["MisalignedTime"])
+    stale_df         = with_datestr(stale)  # if you added the pretty date helper
+    
+    show_table(matched_df,  "✔ Matched",          "matched")
+    show_table(missing_df,  "⚠ Missing",          "missing")
+    show_table(mis_tail_df, "⚠ Tail mismatch",    "misaligned_tail")
+    show_table(mis_time_df, "⚠ Time mismatch",    "misaligned_time")
+    show_table(stale_df,    "⚠ Stale Slots",      "stale")
 
-    def show_table(df, title, key):
-        st.subheader(title)
-        st.dataframe(df, use_container_width=True)
-        if not df.empty:
-            st.download_button(
-                f"Download {title} CSV",
-                df.to_csv(index=False).encode("utf-8"),
-                file_name=f"{key}.csv",
-                mime="text/csv",
-                key=f"dl_{key}"
-            )
-
-    show_table(pd.DataFrame(results["Matched"]), "✔ Matched", "matched")
-    show_table(pd.DataFrame(results["Missing"]), "⚠ Missing", "missing")
-    show_table(pd.DataFrame(results["Misaligned"]), "⚠ Misaligned", "misaligned")
-    show_table(stale, "⚠ Stale Slots", "stale")
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

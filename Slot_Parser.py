@@ -538,7 +538,7 @@ if fl3xx_files and ocs_files:
     with st.expander("🔎 Preview parsed Fl3xx"):
         st.dataframe(fl3xx_df.head(20))
 
-            with st.expander("🔎 Find a SlotRef in raw OCS (pre-filter)"):
+        with st.expander("🔎 Find a SlotRef in raw OCS (pre-filter)"):
             q = st.text_input("Enter SlotRef or fragment (e.g., CYYZAGNN953500 or GNN9535)", key="slotref_query")
             if q:
                 # hits in raw (pre-tail filter & pre-dedup)
@@ -588,6 +588,7 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
 
 
 

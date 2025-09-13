@@ -520,6 +520,8 @@ if fl3xx_files and ocs_files:
     ocs_list = [df for df in ocs_list if not df.empty]
     ocs_df = pd.concat(ocs_list, ignore_index=True) if ocs_list else pd.DataFrame(columns=["SlotAirport","Date","Movement","SlotTimeHHMM","Tail","SlotRef"])
 
+    ocs_df_raw = ocs_df.copy()  # NEW: keep unfiltered, pre-dedup copy
+    
     # Filter OCS slots by tails.csv
     if TAILS:
         before = len(ocs_df)
@@ -535,6 +537,39 @@ if fl3xx_files and ocs_files:
         st.dataframe(ocs_df.head(20))
     with st.expander("🔎 Preview parsed Fl3xx"):
         st.dataframe(fl3xx_df.head(20))
+
+    with st.expander("🔎 Find a SlotRef in raw OCS (pre-filter)"):
+    q = st.text_input("Enter SlotRef or fragment (e.g., CYYZAGNN953500 or GNN9535)", key="slotref_query")
+    if q:
+        # hits in raw (pre-tail filter & pre-dedup)
+        raw_hits = ocs_df_raw[ocs_df_raw["SlotRef"].astype(str).str.contains(q, case=False, na=False)]
+        st.write(f"Raw OCS hits: {len(raw_hits)}")
+        if not raw_hits.empty:
+            st.dataframe(with_datestr(raw_hits))
+
+        # hits in filtered/deduped OCS (the one used for matching)
+        filt_hits = ocs_df[ocs_df["SlotRef"].astype(str).str.contains(q, case=False, na=False)]
+        st.write(f"Filtered OCS hits (after tails.csv & dedup): {len(filt_hits)}")
+        if not filt_hits.empty:
+            st.dataframe(with_datestr(filt_hits))
+
+        # reason hints
+        if raw_hits.empty:
+            st.info("Not found in the uploaded OCS files (pre-filter). Check the other OCS export or time range.")
+        elif raw_hits.empty is False and filt_hits.empty:
+            reasons = []
+            if TAILS:
+                # any row filtered by tail list?
+                if any(row_tail not in TAILS for row_tail in raw_hits["Tail"].astype(str)):
+                    reasons.append("Tail not in tails.csv")
+            # dedup: same SlotRef appears multiple times raw
+            if raw_hits["SlotRef"].nunique() == 1 and len(raw_hits) > 1:
+                reasons.append("Duplicate SlotRef in raw OCS (deduplicated)")
+            if reasons:
+                st.warning("Likely excluded because: " + "; ".join(sorted(set(reasons))))
+            else:
+                st.info("Parsed in raw OCS but excluded after normalization; check tail list and SlotRef format.")
+
 
     results, stale = compare(fl3xx_df, ocs_df)
     
@@ -553,3 +588,4 @@ if fl3xx_files and ocs_files:
 
 else:
     st.info("Upload both Fl3xx and OCS files to begin.")
+
